@@ -1,0 +1,11 @@
+proxies:
+   - socks5h://tor0:9100
+   - socks5h://tor1:9100
+   - socks5h://tor2:9100
+   - socks5h://tor3:9100
+   - socks5h://tor4:9100
+   - socks5h://tor5:9100
+
+http:
+    connect_timeout: 30
+#    debug: true
