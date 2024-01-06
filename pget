@@ -1,0 +1,89 @@
+#!/usr/bin/env python3
+
+import asyncio
+import os
+import random
+import sys
+import traceback
+
+import http
+from imagefaplib import fetch_gallery
+
+import config
+
+def shuffled_proxies():
+    return random.sample(config.proxies, k=len(config.proxies))
+
+async def main():
+
+    if len(sys.argv) <= 1:
+        print('Please provide URLs')
+        return
+
+    async with http.create_http_session(proxies=shuffled_proxies(), **config.http) as session:
+        for url in sys.argv[1:]:
+            await fetch(session, url)
+
+retry_count = 5  # XXX make configurable?
+
+class _TryAnotherProxy(Exception):
+    pass
+
+
+async def fetch(session, url):
+
+    print('Fetching', url)
+    filename = os.path.basename(url).split('?')[0]
+    fileobj = None
+    try:
+        for _ in session.waysout:
+            try:
+                for _ in range(retry_count):
+
+                    if os.path.exists(filename):
+                        response = await session.head(url)
+                        if response.status != '200':
+                            raise _TryAnotherProxy()
+                        response_headers = dict((k.lower(), v) for k, v in response.headers)
+                        content_length = response_headers.get('content-length', None)
+                        file_size = os.path.getsize(filename)
+                        if content_length is not None and file_size == int(content_length):
+                            print('Already downloaded', filename)
+                            return
+                        resume_from = file_size
+                        print('Resume from', resume_from)
+                    else:
+                        resume_from = None
+
+                    if fileobj is None:
+                        fileobj = open(filename, 'ab')
+
+                    response = await session.get(url, response_file=fileobj, resume_from=resume_from)
+                    if response.status != '200':
+                        raise _TryAnotherProxy()
+
+                    print('Downloaded', filename)
+
+                    return
+
+            except _TryAnotherProxy:
+                pass
+
+            except http.ProxyError:
+                pass
+
+            except Exception as e:
+                error = str(e)
+                tb = traceback.format_exc()
+                print('Failed', url, str(e))
+
+            await session.next_proxy(wait=False)
+
+        raise Exception(f'Unable to fetch {url}')
+
+    finally:
+        if fileobj is not None:
+            fileobj.close()
+
+
+asyncio.run(main())
