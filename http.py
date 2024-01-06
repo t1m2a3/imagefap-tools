@@ -3,7 +3,7 @@ import traceback
 from urllib.parse import urlencode
 
 
-MAX_RESPONSE_SIZE = 100000000
+MAX_RESPONSE_SIZE = 100000000  # only when internal BytesIO is used
 
 
 class HttpError(Exception):
@@ -261,14 +261,19 @@ class CurlHttpSession:
 class CurlHttpRequest:
 
     def __init__(self, url, method, headers=None, proxy=None, connect_timeout=None, debug=None,
-                 post_data=None, form_data=None):
+                 post_data=None, form_data=None, response_file=None, resume_from=None):
 
         # post_data, form_data - use one of
 
         self.url = url
         self.method = method
         self.easy_handle = None
-        self.response_body = BytesIO()
+        if response_file is None:
+            self.response_body = BytesIO()
+            self.response_external = False  # XXX this flag is a bad idea, anyway, this is just an abandoned prototype
+        else:
+            self.response_body = response_file
+            self.response_external = True
         self.response_body_size = 0
 
         self.easy_handle = c = acquire_easy_handle()
@@ -298,6 +303,9 @@ class CurlHttpRequest:
                 post_data = urlencode(form_data)
             c.setopt(c.POSTFIELDS, post_data)
 
+        if resume_from is not None:
+            c.setopt(c.RESUME_FROM, resume_from)
+
         self.response = CurlHttpResponse()
         self.header_expect = 'status'
         c.setopt(c.HEADERFUNCTION, self.header_function)
@@ -311,7 +319,7 @@ class CurlHttpRequest:
 
     def write_response_body(self, data):
         self.response_body_size += len(data)
-        if self.response_body_size > MAX_RESPONSE_SIZE:
+        if self.response_body_size > MAX_RESPONSE_SIZE and not self.response_external:
             raise ResponseTooLargeError()
         self.response_body.write(data)
 
@@ -343,8 +351,11 @@ class CurlHttpRequest:
         if self.waiter is None:
             raise RuntimeError('Not performing this request')
 
-        self.response.content = self.response_body.getvalue()
+        # set real URL and received data
         self.response.real_url = self.easy_handle.getinfo(pycurl.EFFECTIVE_URL)
+        if not self.response_external:
+            self.response.content = self.response_body.getvalue()
+
         if not self.waiter.cancelled():
             self.waiter.set_result(self.response)
         self.waiter = None
@@ -354,6 +365,11 @@ class CurlHttpRequest:
         # called from _curl_socket_action
         if self.waiter is None:
             raise RuntimeError('Not performing this request')
+
+        # set real URL and partial data
+        self.response.real_url = self.easy_handle.getinfo(pycurl.EFFECTIVE_URL)
+        if not self.response_external:
+            self.response.content = self.response_body.getvalue()
 
         if not self.waiter.cancelled():
             if errno in _possible_proxy_errors:

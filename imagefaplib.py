@@ -219,47 +219,58 @@ def extract_navi_cavi(image_page, image_page_url):
 
 async def fetch_image(session, url, filename, **kwargs):
 
-    for _ in session.waysout:
-        try:
-            for _ in range(retry_count):
+    fileobj = None
+    try:
+        for _ in session.waysout:
+            try:
+                for _ in range(retry_count):
 
-                if os.path.exists(filename):
-                    response = await session.head(url, **kwargs)
+                    if os.path.exists(filename):
+                        response = await session.head(url, **kwargs)
+                        if response.status != '200':
+                            raise _TryAnotherProxy()
+                        response_headers = dict((k.lower(), v) for k, v in response.headers)
+                        content_length = response_headers.get('content-length', None)
+                        file_size = os.path.getsize(filename)
+                        if content_length is not None and file_size == int(content_length):
+                            print('Already downloaded', filename)
+                            return
+                        resume_from = file_size
+                        print('Resume from', resume_from)
+                    else:
+                        resume_from = None
+
+                    if fileobj is None:
+                        fileobj = open(filename, 'ab')
+
+                    response = await session.get(url, response_file=fileobj, resume_from=resume_from, **kwargs)
                     if response.status != '200':
                         raise _TryAnotherProxy()
+
                     response_headers = dict((k.lower(), v) for k, v in response.headers)
-                    content_length = response_headers.get('content-length', None)
-                    if content_length is not None and os.path.getsize(filename) == int(content_length):
-                        print('Already downloaded', filename)
-                        return
 
-                response = await session.get(url, **kwargs)
-                if response.status != '200':
-                    raise _TryAnotherProxy()
+                    if not response_headers.get('content-type', '').startswith('image'):
+                        raise _TryAnotherProxy()
 
-                response_headers = dict((k.lower(), v) for k, v in response.headers)
+                    print('Saved', filename)
 
-                if not response_headers.get('content-type', '').startswith('image'):
-                    raise _TryAnotherProxy()
+                    return
 
+            except _TryAnotherProxy:
+                pass
 
-                with open(filename, 'wb') as f:
-                    f.write(response.content)
-                print('Saved', filename)
+            except http.ProxyError:
+                pass
 
-                return
+            except Exception as e:
+                error = str(e)
+                tb = traceback.format_exc()
+                print('Failed', url, str(e))
 
-        except _TryAnotherProxy:
-            pass
+            await session.next_proxy(wait=False)
 
-        except http.ProxyError:
-            pass
+        raise Exception(f'Unable to fetch {url}')
 
-        except Exception as e:
-            error = str(e)
-            tb = traceback.format_exc()
-            print('Failed', url, str(e))
-
-        await session.next_proxy(wait=False)
-
-    raise Exception(f'Unable to fetch {url}')
+    finally:
+        if fileobj is not None:
+            fileobj.close()
