@@ -291,7 +291,9 @@ class CurlHttpRequest:
         if debug:
             c.setopt(c.VERBOSE, 1)
 
-        if method == 'POST':
+        if method == 'HEAD':
+            c.setopt(c.NOBODY, 1)
+        elif method == 'POST':
             if form_data is not None:
                 post_data = urlencode(form_data)
             c.setopt(c.POSTFIELDS, post_data)
